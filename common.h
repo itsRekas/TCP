@@ -9,6 +9,8 @@ extern int verbose;
 #define INFO    0x1 
 #define DEBUG   0x100
 #define ALL     0x111
+#define WINDOW_SIZE 10
+#define TIMEOUT_USEC 500000   
 
 #define VLOG(level, ... ) \
     if(level & verbose) { \

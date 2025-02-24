@@ -19,14 +19,29 @@
 
 int next_seqno=0;
 int send_base=0;
-int window_size = 1;
+int buffer_current_index=0;
+int buffer_end_index=0;
+int cum_seq_num = 0;
 
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
 struct itimerval timer; 
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
-sigset_t sigmask;       
+sigset_t sigmask;  
+
+packet_buffer_entry packet_buffer[WINDOW_SIZE];
+
+void add_packets_to_buffer(tcp_packet *pkt, int len){
+    if(((buffer_end_index+1)%WINDOW_SIZE)>=buffer_current_index)return;
+    packet_buffer[buffer_current_index].pkt=pkt;
+    packet_buffer[buffer_current_index].size=TCP_HDR_SIZE+len;
+    packet_buffer[buffer_current_index].sent=0;
+    packet_buffer[buffer_current_index].seq_no=cum_seq_num;
+
+    cum_seq_num+=len;
+    buffer_end_index++;
+}
 
 
 void resend_packets(int sig)
