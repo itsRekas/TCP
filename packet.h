@@ -24,8 +24,7 @@ tcp_packet* make_packet(int seq);
 int get_data_size(tcp_packet *pkt);
 
 typedef struct {
-    tcp_packet *pkt;  
-    int sent;         
+    tcp_packet *pkt;           
     int size;
     int seq_no;         
 } packet_buffer_entry;
