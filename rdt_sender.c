@@ -17,11 +17,11 @@
 #define STDIN_FD    0
 #define RETRY  120 //millisecond
 
-int next_seqno=0;
-int send_base=0;
+
 int buffer_current_index=0;
 int buffer_end_index=0;
 int cum_seq_num = 0;
+int dup_ACK_count=0;
 
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
@@ -32,30 +32,55 @@ sigset_t sigmask;
 
 packet_buffer_entry packet_buffer[WINDOW_SIZE];
 
-void add_packets_to_buffer(tcp_packet *pkt, int len){
-    if(((buffer_end_index+1)%WINDOW_SIZE)>=buffer_current_index)return;
-    packet_buffer[buffer_current_index].pkt=pkt;
-    packet_buffer[buffer_current_index].size=TCP_HDR_SIZE+len;
-    packet_buffer[buffer_current_index].sent=0;
-    packet_buffer[buffer_current_index].seq_no=cum_seq_num;
+int is_buffer_full() {
+    return ((buffer_end_index+1)%WINDOW_SIZE)>=buffer_current_index;
+}
 
+void add_packet_to_buffer(tcp_packet **pkt, int len){
+    if(is_buffer_full())return;
+
+    if (packet_buffer[buffer_end_index].pkt != NULL) {
+        free(packet_buffer[buffer_end_index].pkt);
+    }
+
+    packet_buffer[buffer_end_index].pkt=pkt;
+    packet_buffer[buffer_end_index].size=TCP_HDR_SIZE+len;
+    packet_buffer[buffer_end_index].sent=0;
+    packet_buffer[buffer_end_index].seq_no=packet_buffer[buffer_end_index].pkt->hdr.seqno;
+
+    VLOG(DEBUG, "Sending packet %d to %s", 
+        seq_i, inet_ntoa(serveraddr.sin_addr));
+    
+    if (sendto(sockfd, packet_buffer[buffer_end_index].pkt, 
+               packet_buffer[buffer_end_index].size, 0, 
+               (const struct sockaddr *)&serveraddr, serverlen) < 0) {
+        error("sendto");
+    }
+    
     cum_seq_num+=len;
     buffer_end_index++;
 }
 
 
-void resend_packets(int sig)
+void resend_packet(int sig)
 {
     if (sig == SIGALRM)
     {
         //Resend all packets range between 
         //sendBase and nextSeqNum
         VLOG(INFO, "Timeout happend");
-        if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
-                    ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-        {
-            error("sendto");
+
+        if (packet_buffer[buffer_current_index].pkt != NULL) {
+            if (sendto(sockfd, packet_buffer[buffer_current_index].pkt,
+                      packet_buffer[buffer_current_index].size, 0,
+                      (const struct sockaddr *)&serveraddr, serverlen) < 0) {
+                error("sendto");
+            }
         }
+        
+        // Restart timer
+        stop_timer();
+        start_timer();
             
     }
 }
@@ -91,6 +116,78 @@ void init_timer(int delay, void (*sig_handler)(int))
     sigaddset(&sigmask, SIGALRM);
 }
 
+void process_acks() {
+    char ack_buffer[MSS_SIZE];
+
+    // Non-blocking receive to check for ACKs
+    struct sockaddr_in recv_addr;
+    socklen_t recv_len = sizeof(recv_addr);
+    
+    fd_set readfds;
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;  // Non-blocking
+    
+    FD_ZERO(&readfds);
+    FD_SET(sockfd, &readfds);
+    
+    while (select(sockfd + 1, &readfds, NULL, NULL, &tv) > 0) {
+        // Data available
+        int recv_bytes = recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,
+                       (struct sockaddr *)&recv_addr, &recv_len);
+        if (recv_bytes < 0) {
+            error("recvfrom");
+        }
+        
+        recvpkt = (tcp_packet *)ack_buffer;
+        if (recvpkt->hdr.ctr_flags != ACK) {
+            continue;  // Not an ACK packet
+        }
+        
+        int ackno = recvpkt->hdr.ackno;
+        
+        VLOG(DEBUG, "Received ACK %d", ackno);
+        
+        // Check if this is a duplicate ACK
+        if (ackno > packet_buffer[buffer_current_index].seq_no) {
+            dup_ACK_count++;
+            packet_buffer[(ackno/DATA_SIZE)%WINDOW_SIZE].sent=1;
+            if (dup_ACK_count >= 3) {
+                // Fast retransmit - resend the first unacknowledged packet
+                VLOG(INFO, "Fast retransmit for packet %d", send_base);
+                if (packet_buffer[buffer_current_index].pkt != NULL) {
+                    if (sendto(sockfd, packet_buffer[buffer_current_index].pkt,
+                              packet_buffer[buffer_current_index].size, 0,
+                              (const struct sockaddr *)&serveraddr, serverlen) < 0) {
+                        error("sendto");
+                    }
+                    
+                    // Reset timer
+                    stop_timer();
+                    start_timer();
+                }
+                dup_ACK_count = 0;
+            }
+        } 
+        else if(ackno<packet_buffer[buffer_current_index].seq_no){
+            continue;
+        }
+        else {
+            assert(ackno==packet_buffer[buffer_current_index].seq_no);
+            packet_buffer[buffer_current_index].sent=1;
+            while(packet_buffer[buffer_current_index].sent){
+                memcpy(packet_buffer[buffer_current_index],0,packet_buffer[buffer_current_index].size);
+                buffer_current_index=((buffer_current_index+1)%WINDOW_SIZE);
+            }
+        }
+        
+        // Reset for next select call
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+    }
+}
 
 int main (int argc, char **argv)
 {
@@ -136,61 +233,79 @@ int main (int argc, char **argv)
 
     //Stop and wait protocol
 
-    init_timer(RETRY, resend_packets);
-    next_seqno = 0;
+    init_timer(RETRY, resend_packet);
+    cum_seq_num = 0;
+
+    // Initialize packet buffer
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        packet_buffer[i].pkt = NULL;
+        packet_buffer[i].sent = 0;
+        packet_buffer[i].size = 0;
+        packet_buffer[i].seq_no = 0;
+    }
+
     while (1)
     {
-        len = fread(buffer, 1, DATA_SIZE, fp);
-        if ( len <= 0)
-        {
-            VLOG(INFO, "End Of File has been reached");
-            sndpkt = make_packet(0);
-            sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
-                    (const struct sockaddr *)&serveraddr, serverlen);
-            break;
+        while(!is_buffer_full()){
+
+            len = fread(buffer, 1, DATA_SIZE, fp);
+            if ( len <= 0)
+            {
+                VLOG(INFO, "End Of File has been reached");
+                sndpkt = make_packet(0);
+                sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
+                        (const struct sockaddr *)&serveraddr, serverlen);
+                break;
+            }
+            sndpkt = make_packet(len);
+            memcpy(sndpkt->data, buffer, len);
+            sndpkt->hdr.seqno = cum_seq_num;
+            add_packet_to_buffer(&sndpkt,len);
         }
-        send_base = next_seqno;
-        next_seqno = send_base + len;
-        sndpkt = make_packet(len);
-        memcpy(sndpkt->data, buffer, len);
-        sndpkt->hdr.seqno = send_base;
         //Wait for ACK
         do {
+            
+            process_acks();
 
-            VLOG(DEBUG, "Sending packet %d to %s", 
-                    send_base, inet_ntoa(serveraddr.sin_addr));
-            /*
-             * If the sendto is called for the first time, the system will
-             * will assign a random port number so that server can send its
-             * response to the src port.
-             */
-            if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
-                        ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-            {
-                error("sendto");
-            }
+            usleep(1000);
+            
+            
+        }while(is_buffer_full());  
+            
+        //     VLOG(DEBUG, "Sending packet %d to %s", 
+        //             send_base, inet_ntoa(serveraddr.sin_addr));
+        //     /*
+        //      * If the sendto is called for the first time, the system will
+        //      * will assign a random port number so that server can send its
+        //      * response to the src port.
+        //      */
+        //     if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
+        //                 ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+        //     {
+        //         error("sendto");
+        //     }
 
 
 
-            start_timer();
-            //ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
-            //struct sockaddr *src_addr, socklen_t *addrlen);
+        //     start_timer();
+        //     //ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+        //     //struct sockaddr *src_addr, socklen_t *addrlen);
 
-            do
-            {
-                if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
-                            (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
-                {
-                    error("recvfrom");
-                }
+        //     do
+        //     {
+        //         if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
+        //                     (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+        //         {
+        //             error("recvfrom");
+        //         }
 
-                recvpkt = (tcp_packet *)buffer;
-                printf("%d \n", get_data_size(recvpkt));
-                assert(get_data_size(recvpkt) <= DATA_SIZE);
-            }while(recvpkt->hdr.ackno < next_seqno);    //ignore duplicate ACKs
-            stop_timer();
-            /*resend pack if don't recv ACK */
-        } while(recvpkt->hdr.ackno != next_seqno);      
+        //         recvpkt = (tcp_packet *)buffer;
+        //         printf("%d \n", get_data_size(recvpkt));
+        //         assert(get_data_size(recvpkt) <= DATA_SIZE);
+        //     }while(recvpkt->hdr.ackno < next_seqno);    //ignore duplicate ACKs
+        //     stop_timer();
+        //     /*resend pack if don't recv ACK */
+        // } while(recvpkt->hdr.ackno != next_seqno);      
 
         free(sndpkt);
     }
