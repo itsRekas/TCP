@@ -18,7 +18,7 @@
 #define RETRY  120 //millisecond
 
 
-int buffer_current_index=0;
+int buffer_current_index=-1;
 int buffer_end_index=0;
 int cum_seq_num = 0;
 int dup_ACK_count=0;
@@ -41,11 +41,15 @@ void process_acks();
 
 
 int is_buffer_full() {
-    return (buffer_end_index + 1) % WINDOW_SIZE == buffer_current_index;
+    return (buffer_end_index) % WINDOW_SIZE == buffer_current_index;
 }
 
 void add_packet_to_buffer(tcp_packet *pkt, int len){
     if(is_buffer_full())return;
+
+    if(buffer_current_index==-1){
+        buffer_current_index=0;
+    }   
 
     if (packet_buffer[buffer_end_index].pkt != NULL) {
         free(packet_buffer[buffer_end_index].pkt);
@@ -255,20 +259,22 @@ int main (int argc, char **argv)
     while (1)
     {
         while(!is_buffer_full()){
-
-            len = fread(buffer, 1, DATA_SIZE, fp);
-            if (len <= 0) 
-            {
-                VLOG(INFO, "End Of File has been reached");
-                sndpkt = make_packet(0);
-                sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
-                    (const struct sockaddr *)&serveraddr, serverlen);
-                break;
-            }
-            sndpkt = make_packet(len);
-            memcpy(sndpkt->data, buffer, len);
-            sndpkt->hdr.seqno = cum_seq_num;
-            add_packet_to_buffer(sndpkt,len);
+        len = fread(buffer, 1, DATA_SIZE, fp);
+        if (len <= 0) 
+        {
+            VLOG(INFO, "End Of File has been reached");
+            sndpkt = make_packet(0);
+            sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
+                (const struct sockaddr *)&serveraddr, serverlen);
+            free(sndpkt);
+            // Add a return statement or break the outer loop
+            return 0; // This will exit the program
+            // OR use: goto end_transmission; // And add a label at the end
+        }
+        sndpkt = make_packet(len);
+        memcpy(sndpkt->data, buffer, len);
+        sndpkt->hdr.seqno = cum_seq_num;
+        add_packet_to_buffer(sndpkt,len);
         }
         start_timer();
         //Wait for ACK
