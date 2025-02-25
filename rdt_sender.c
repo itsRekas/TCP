@@ -34,6 +34,12 @@ sigset_t sigmask;
 
 packet_buffer_entry packet_buffer[WINDOW_SIZE];
 
+void start_timer();
+void stop_timer();
+void init_timer(int delay, void (*sig_handler)(int));
+void process_acks();
+
+
 int is_buffer_full() {
     return (buffer_end_index + 1) % WINDOW_SIZE == buffer_current_index;
 }
@@ -196,7 +202,6 @@ void process_acks() {
 int main (int argc, char **argv)
 {
     int portno, len;
-    int next_seqno;
     char *hostname;
     char buffer[DATA_SIZE];
     FILE *fp;
