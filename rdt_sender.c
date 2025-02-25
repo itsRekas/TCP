@@ -335,7 +335,7 @@ void process_acks();
 
 // Fixed buffer full condition
 int is_buffer_full() {
-    return (buffer_end_index + 1) % WINDOW_SIZE == buffer_current_index;
+    return (buffer_end_index) % WINDOW_SIZE == buffer_current_index;
 }
 
 void add_packet_to_buffer(tcp_packet *pkt, int len) {
