@@ -18,7 +18,7 @@
 #define RETRY 120 //millisecond
 
 
-int buffer_current_index=0;
+int buffer_current_index=-1;
 int buffer_end_index=0;
 int cum_seq_num = 0;
 int dup_ACK_count=0;
@@ -41,11 +41,15 @@ void process_acks();
 
 
 int is_buffer_full() {
-return (buffer_end_index + 1) % WINDOW_SIZE == buffer_current_index;
+return (buffer_end_index) % WINDOW_SIZE == buffer_current_index;
 }
 
 void add_packet_to_buffer(tcp_packet *pkt, int len){
 if(is_buffer_full())return;
+
+if(buffer_current_index==-1){
+    buffer_current_index=0;
+}
 
 if (packet_buffer[buffer_end_index].pkt != NULL) {
 free(packet_buffer[buffer_end_index].pkt);
@@ -128,75 +132,75 @@ sigaddset(&sigmask, SIGALRM);
 }
 
 void process_acks() {
-char ack_buffer[MSS_SIZE];
+    char ack_buffer[MSS_SIZE];
 
-// Non-blocking receive to check for ACKs
-struct sockaddr_in recv_addr;
-socklen_t recv_len = sizeof(recv_addr);
+    // Non-blocking receive to check for ACKs
+    struct sockaddr_in recv_addr;
+    socklen_t recv_len = sizeof(recv_addr);
 
-fd_set readfds;
-struct timeval tv;
-tv.tv_sec = 0;
-tv.tv_usec = 0; // Non-blocking
+    fd_set readfds;
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0; // Non-blocking
 
-FD_ZERO(&readfds);
-FD_SET(sockfd, &readfds);
+    FD_ZERO(&readfds);
+    FD_SET(sockfd, &readfds);
 
-while (select(sockfd + 1, &readfds, NULL, NULL, &tv) > 0) {
-// Data available
-int recv_bytes = recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,
-(struct sockaddr *)&recv_addr, &recv_len);
-if (recv_bytes < 0) {
-error("recvfrom");
-}
+    while (select(sockfd + 1, &readfds, NULL, NULL, &tv) > 0) {
+    // Data available
+        int recv_bytes = recvfrom(sockfd, ack_buffer, MSS_SIZE, 0,
+        (struct sockaddr *)&recv_addr, &recv_len);
+        if (recv_bytes < 0) {
+            error("recvfrom");
+        }
 
-recvpkt = (tcp_packet *)ack_buffer;
-if ((recvpkt->hdr.ctr_flags & ACK) == 0) {
-continue; // Not an ACK packet
-}
+        recvpkt = (tcp_packet *)ack_buffer;
+        if ((recvpkt->hdr.ctr_flags & ACK) == 0) {
+            continue; // Not an ACK packet
+        }
 
-int ackno = recvpkt->hdr.ackno;
+        int ackno = recvpkt->hdr.ackno;
 
-VLOG(DEBUG, "Received ACK %d", ackno);
+        VLOG(DEBUG, "Received ACK %d", ackno);
 
-// Check if this is a duplicate ACK
-if (ackno ==last_ackno) {
-dup_ACK_count++;
-if (dup_ACK_count >= 3) {
-// Fast retransmit - resend the first unacknowledged packet
-VLOG(INFO, "Fast retransmit for packet %d", packet_buffer[buffer_current_index].seq_no);
-if (packet_buffer[buffer_current_index].pkt != NULL) {
-if (sendto(sockfd, packet_buffer[buffer_current_index].pkt,
-packet_buffer[buffer_current_index].size, 0,
-(const struct sockaddr *)&serveraddr, serverlen) < 0) {
-error("sendto");
-}
+        // Check if this is a duplicate ACK
+        if (ackno ==last_ackno) {
+            dup_ACK_count++;
+            if (dup_ACK_count >= 3) {
+            // Fast retransmit - resend the first unacknowledged packet
+                VLOG(INFO, "Fast retransmit for packet %d", packet_buffer[buffer_current_index].seq_no);
+                if (packet_buffer[buffer_current_index].pkt != NULL) {
+                    if (sendto(sockfd, packet_buffer[buffer_current_index].pkt,
+                    packet_buffer[buffer_current_index].size, 0,
+                    (const struct sockaddr *)&serveraddr, serverlen) < 0) {
+                    error("sendto");
+                    }
 
-// Reset timer
-}
-stop_timer();
-start_timer();
-dup_ACK_count = 0;
-}
-}
-else {
-last_ackno=ackno;
-dup_ACK_count=0;
-while(packet_buffer[buffer_current_index].seq_no + (packet_buffer[buffer_current_index].size - TCP_HDR_SIZE) <= ackno){
-free(packet_buffer[buffer_current_index].pkt);
-packet_buffer[buffer_current_index].pkt = NULL;
-packet_buffer[buffer_current_index].size = 0;
-packet_buffer[buffer_current_index].seq_no = 0;
-buffer_current_index = (buffer_current_index + 1) % WINDOW_SIZE;
-}
-}
+                    // Reset timer
+                }
+                stop_timer();
+                start_timer();
+                dup_ACK_count = 0;
+            }
+        }
+        else {
+            last_ackno=ackno;
+            dup_ACK_count=0;
+            while(packet_buffer[buffer_current_index].seq_no + (packet_buffer[buffer_current_index].size - TCP_HDR_SIZE) <= ackno){
+                free(packet_buffer[buffer_current_index].pkt);
+                packet_buffer[buffer_current_index].pkt = NULL;
+                packet_buffer[buffer_current_index].size = 0;
+                packet_buffer[buffer_current_index].seq_no = 0;
+                buffer_current_index = (buffer_current_index + 1) % WINDOW_SIZE;
+            }
+        }
 
-// Reset for next select call
-FD_ZERO(&readfds);
-FD_SET(sockfd, &readfds);
-tv.tv_sec = 0;
-tv.tv_usec = 0;
-}
+        // Reset for next select call
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+    }
 }
 
 int main (int argc, char **argv)
@@ -254,34 +258,34 @@ packet_buffer[i].seq_no = 0;
 
 while (1)
 {
-while(!is_buffer_full()){
+    while(!is_buffer_full()){
 
-len = fread(buffer, 1, DATA_SIZE, fp);
-if (len <= 0)
-{
-VLOG(INFO, "End Of File has been reached");
-sndpkt = make_packet(0);
-sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
-(const struct sockaddr *)&serveraddr, serverlen);
-break;
-}
-sndpkt = make_packet(len);
-memcpy(sndpkt->data, buffer, len);
-sndpkt->hdr.seqno = cum_seq_num;
-add_packet_to_buffer(sndpkt,len);
-}
-start_timer();
-//Wait for ACK
-do {
+        len = fread(buffer, 1, DATA_SIZE, fp);
+        if (len <= 0)
+        {
+            VLOG(INFO, "End Of File has been reached");
+            sndpkt = make_packet(0);
+            sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0,
+            (const struct sockaddr *)&serveraddr, serverlen);
+            break;
+        }
+        sndpkt = make_packet(len);
+        memcpy(sndpkt->data, buffer, len);
+        sndpkt->hdr.seqno = cum_seq_num;
+        add_packet_to_buffer(sndpkt,len);
+    }
+    start_timer();
+    //Wait for ACK
+    do {
 
-process_acks();
+        process_acks();
 
-usleep(1000);
+        usleep(1000);
 
 
-}while(is_buffer_full());
+    }while(is_buffer_full());
 
-free(sndpkt);
+    free(sndpkt);
 }
 
 return 0;
