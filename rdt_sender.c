@@ -42,6 +42,7 @@ void resend_packet(int sig);
 void process_acks();
 int add_packet_to_buffer(tcp_packet *pkt, int len); // Function to add to the buffer
 tcp_packet* create_packet(int data_len, int seq_num, char* data);
+void print_window_status(); // New function to print window status
 
 int main(int argc, char **argv) {
     int portno, n;
@@ -94,6 +95,9 @@ int main(int argc, char **argv) {
         packet_buffer[i].pkt = NULL; // Important: Initialize to NULL
     }
 
+    printf("Window size: %d packets\n", window_size);
+    printf("Starting transmission...\n");
+
     // Main loop to read from file and send packets
     while ((n = fread(buf, 1, DATA_SIZE, fp)) > 0) {
         // Check if window is full
@@ -127,12 +131,12 @@ int main(int argc, char **argv) {
     }
     fclose(fp);
 
-     // Send End-of-File packet
+    // Send End-of-File packet
     tcp_packet *eof_pkt = make_packet(0); // Zero length
     eof_pkt->hdr.seqno = next_seq_num; // Sequence number of EOF packet
     eof_pkt->hdr.ctr_flags = 0;
 
-    VLOG(DEBUG, "Sending EOF packet with seqno: %d", eof_pkt->hdr.seqno);
+    printf("Sending EOF packet with seqno: %d\n", eof_pkt->hdr.seqno);
 
     if (sendto(sockfd, eof_pkt, TCP_HDR_SIZE, 0, (const struct sockaddr *)&serveraddr, serverlen) < 0) {
         error("sendto");
@@ -144,8 +148,29 @@ int main(int argc, char **argv) {
     }
 
     free(eof_pkt); // Free the EOF packet
+    printf("Transmission complete. Total bytes sent: %d\n", next_seq_num);
     close(sockfd);
     return 0;
+}
+
+/**
+ * Print current window status
+ */
+void print_window_status() {
+    printf("Window: [%d -> %d] (base -> next_seq_num)\n", base, next_seq_num);
+    printf("Packets in flight: ");
+    int count = 0;
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        int buffer_index = (base + i) % WINDOW_SIZE;
+        if (packet_buffer[buffer_index].pkt != NULL) {
+            printf("%d ", packet_buffer[buffer_index].seq_no);
+            count++;
+        }
+    }
+    if (count == 0) {
+        printf("None");
+    }
+    printf("\n");
 }
 
 /**
@@ -183,13 +208,16 @@ int add_packet_to_buffer(tcp_packet *pkt, int len) {
     packet_buffer[buffer_index].size = TCP_HDR_SIZE + len;
     packet_buffer[buffer_index].seq_no = pkt->hdr.seqno;
 
-    VLOG(DEBUG, "Adding packet %d to buffer at index %d", pkt->hdr.seqno, buffer_index);
+    printf("Sending packet %d (index %d)\n", pkt->hdr.seqno, buffer_index);
 
     // Send the packet
     if (sendto(sockfd, pkt, TCP_HDR_SIZE + len, 0, (const struct sockaddr *)&serveraddr, serverlen) < 0) {
         perror("sendto");
         return 0;
     }
+    
+    // Print window status after sending a new packet
+    print_window_status();
     return 1;
 }
 
@@ -207,18 +235,21 @@ void process_acks() {
         tcp_packet *ack_pkt = (tcp_packet *)ack_buffer;
         if (ack_pkt->hdr.ctr_flags & ACK) {
             int ackno = ack_pkt->hdr.ackno;
+            last_ackno = ackno;
 
-            VLOG(DEBUG, "Received ACK %d", ackno);
+            printf("Received ACK %d\n", ackno);
             if (ackno >= base) {
                 // Acknowledge received
                 int packets_acked = (ackno - base); //How many packets are being ACK'd.
-                VLOG(DEBUG, "Advancing window by %d bytes", packets_acked);
+                printf("Window advancing: %d -> %d (by %d bytes)\n", 
+                       base, ackno, packets_acked);
 
                 // Free all packets that have been acked
                 for (int i = 0; i < WINDOW_SIZE; i++){
                     int buffer_index = (base + i) % WINDOW_SIZE;
                     if(packet_buffer[buffer_index].pkt != NULL && packet_buffer[buffer_index].seq_no < ackno) {
-                        VLOG(DEBUG, "Freeing packet %d from buffer", packet_buffer[buffer_index].seq_no);
+                        printf("ACKed packet %d (index %d)\n", 
+                               packet_buffer[buffer_index].seq_no, buffer_index);
                         free(packet_buffer[buffer_index].pkt);
                         packet_buffer[buffer_index].pkt = NULL;
                     }
@@ -229,19 +260,23 @@ void process_acks() {
                 // Stop timer if the base has caught up with next_seq_num (window is empty)
                 if (base == next_seq_num) {
                   stop_timer();
-                  VLOG(DEBUG, "Window is empty, stopping timer");
+                  printf("Window is empty, stopping timer\n");
                 } else {
                   start_timer();
+                  printf("Restarting timer for remaining packets\n");
                 }
                 dup_ack_count = 0;
+                
+                // Print updated window status
+                print_window_status();
             } else {
                 // Duplicate ACK
                 dup_ack_count++;
-                VLOG(DEBUG, "Duplicate ACK received, count = %d", dup_ack_count);
+                printf("Duplicate ACK %d received (count = %d)\n", ackno, dup_ack_count);
 
                 if (dup_ack_count == 3) {
                     // Fast retransmit
-                    VLOG(INFO, "Triple duplicate ACK received, performing fast retransmit");
+                    printf("FAST RETRANSMIT: Triple duplicate ACK received\n");
                     resend_packet(0);  // Resend the unacknowledged packet
                     dup_ack_count = 0;  // Reset count
                 }
@@ -271,16 +306,18 @@ void init_timer(int delay, void (*sig_handler)(int)) {
 
 void resend_packet(int sig) {
     if (sig == SIGALRM) {
-        VLOG(INFO, "Timeout occurred, resending packet");
+        printf("TIMEOUT: Resending oldest unacknowledged packet\n");
         //Resend the base packet
         int buffer_index = base % WINDOW_SIZE; // Index in the buffer
         if (packet_buffer[buffer_index].pkt != NULL) {
-            VLOG(DEBUG, "Resending packet %d", packet_buffer[buffer_index].pkt->hdr.seqno);
-            if (sendto(sockfd, packet_buffer[buffer_index].pkt, packet_buffer[buffer_index].size, 0, (const struct sockaddr *)&serveraddr, serverlen) < 0) {
+            printf("Resending packet %d (index %d)\n", 
+                  packet_buffer[buffer_index].pkt->hdr.seqno, buffer_index);
+            if (sendto(sockfd, packet_buffer[buffer_index].pkt, packet_buffer[buffer_index].size, 0, 
+                      (const struct sockaddr *)&serveraddr, serverlen) < 0) {
                 error("sendto");
             }
             start_timer(); // Restart the timer
+            print_window_status(); // Print current window status
         }
     }
 }
-
