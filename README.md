@@ -79,8 +79,9 @@ mm-delay 50 mm-loss 1 ./rdt_sender 127.0.0.1 8080 sample.txt
 - Add **multi-threading** support for handling multiple connections.
 
 ## Authors
-**Reginald Kotey Appiah Sekyere** – [GitHub Profile](https://github.com/itsRekas)
-**Khaleeqa Aasiyah** – [GitHub Profile]([https://github.com/itsRekas](https://github.com/Khaleeks))
+**Reginald Kotey Appiah Sekyere** – [GitHub Profile](https://github.com/itsRekas).
+**Khaleeqa Aasiyah** – [GitHub Profile]([https://github.com/itsRekas](https://github.com/Khaleeks)).
+**
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
