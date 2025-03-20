@@ -147,15 +147,23 @@ int main(int argc, char **argv) {
         if (recvpkt->hdr.data_size == 0) { // **EOF detected**
             VLOG(INFO, "EOF reached. Sending final ACK %d", next_expected_seqno);
         
+        if (recvpkt->hdr.data_size == 0) { // **EOF detected**
+            VLOG(INFO, "EOF reached. Sending final ACK %d", next_expected_seqno);
+        
             sndpkt = make_packet(0);
             sndpkt->hdr.ackno = next_expected_seqno; // **ACK EOF**
+            sndpkt->hdr.ackno = next_expected_seqno; // **ACK EOF**
             sndpkt->hdr.ctr_flags = ACK;
+        
+            if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, (struct sockaddr *) &clientaddr, clientlen) < 0) {
         
             if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, (struct sockaddr *) &clientaddr, clientlen) < 0) {
                 error("ERROR in sendto");
             }
             
             free(sndpkt);
+            fclose(fp); // **Close file after EOF to ensure data is written**
+            break; // **Terminate properly**
             fclose(fp); // **Close file after EOF to ensure data is written**
             break; // **Terminate properly**
         }

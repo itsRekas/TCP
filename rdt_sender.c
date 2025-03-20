@@ -408,6 +408,8 @@ void resend_packet(int sig) {
 void start_timer() {
     sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
     setitimer(ITIMER_REAL, &timer, NULL);
+    sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
+    setitimer(ITIMER_REAL, &timer, NULL);
 }
 
 /**
@@ -415,10 +417,25 @@ void start_timer() {
  * 
  * Blocks SIGALRM signals to prevent timer interrupts.
  */
+/**
+ * Deactivates the retransmission timer.
+ * 
+ * Blocks SIGALRM signals to prevent timer interrupts.
+ */
 void stop_timer() {
+    sigprocmask(SIG_BLOCK, &sigmask, NULL);
     sigprocmask(SIG_BLOCK, &sigmask, NULL);
 }
 
+/*
+ * init_timer: Initialize timer
+ * delay: delay in milliseconds
+ * sig_handler: signal handler function for re-sending unACKed packets
+ */
+/**
+ * Initializes the retransmission timer with specified delay and handler.
+ * Sets up SIGALRM signal handling and configures the interval timer structure.
+ */
 /*
  * init_timer: Initialize timer
  * delay: delay in milliseconds
