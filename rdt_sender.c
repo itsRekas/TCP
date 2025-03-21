@@ -16,6 +16,7 @@
 // Additional utilities
 #include <time.h>        // Time functions
 #include <assert.h>      // Diagnostic assertions
+#include <math.h>
 
 // Custom headers
 #include "packet.h"      // TCP packet structure definition
@@ -108,8 +109,8 @@ void log_cwnd() {
     double time_diff = (tv_now.tv_sec - tv_last_window_change.tv_sec) + 
                       (tv_now.tv_usec - tv_last_window_change.tv_usec) / 1000000.0;
     
-    // Write to CWND log file
-    fprintf(cwnd_file, "%f,%f\n", time_diff, cwnd);
+    // Write to CWND log file with three columns: time, cwnd, ssthresh
+    fprintf(cwnd_file, "%f,%f,%d\n", time_diff, cwnd, ssthresh);
     fflush(cwnd_file);
     
     // Update the last window change time
@@ -590,7 +591,7 @@ int main(int argc, char **argv) {
     if (cwnd_file == NULL) {
         error("Cannot open CWND.csv");
     }
-    fprintf(cwnd_file, "time,cwnd\n");
+    fprintf(cwnd_file, "time,cwnd,ssthresh\n");
     
     // Initialize time tracking
     gettimeofday(&tv_last_window_change, NULL);
