@@ -36,6 +36,8 @@ enum {
     CONGESTION_AVOIDANCE
 };
 
+struct timeval tv_start, tv_now;
+
 // Sliding window management
 int buffer_current_index = 0;    // Start of the current window
 int buffer_end_index = 0;        // End of the current window
@@ -105,12 +107,13 @@ void log_cwnd() {
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
     
+    // double time_diff = (tv_now.tv_sec - tv_last_window_change.tv_sec) + 
+    //                   (tv_now.tv_usec - tv_last_window_change.tv_usec) / 1000000.0;
+    double time_now = (tv_now.tv_sec - tv_start.tv_sec) + (tv_now.tv_usec - tv_start.tv_usec) / 1000000.0;
     // Calculate time since program start
-    double time_diff = (tv_now.tv_sec - tv_last_window_change.tv_sec) + 
-                      (tv_now.tv_usec - tv_last_window_change.tv_usec) / 1000000.0;
     
     // Write to CWND log file with three columns: time, cwnd, ssthresh
-    fprintf(cwnd_file, "%f,%f,%d\n", time_diff, cwnd, ssthresh);
+    fprintf(cwnd_file, "%f,%f,%d\n", time_now, cwnd, ssthresh);
     fflush(cwnd_file);
     
     // Update the last window change time
@@ -160,7 +163,8 @@ void update_cwnd(int ack, int duplicate) {
             log_cwnd();
         } else if (congestion_state == CONGESTION_AVOIDANCE) {
             // Congestion Avoidance: increase cwnd by 1/cwnd for each ACK
-            cwnd += 1.0 / cwnd;
+            
+            cwnd += 1.0 / floorf(cwnd);
             log_cwnd();
         }
     }
@@ -448,7 +452,6 @@ void stop_timer() {
  */
 void init_timer(int delay, void (*sig_handler)(int)) {
     signal(SIGALRM, sig_handler);
-
     // convert seconds to milliseconds for the timer
     int delay_ms = (int)(rto * 1000);
     if (delay_ms < delay) delay_ms = delay;
@@ -571,7 +574,7 @@ int main(int argc, char **argv) {
     char *hostname;                    // Server hostname/IP
     char buffer[DATA_SIZE];            // Data read buffer
     FILE *fp;                          // File handle for reading
-
+    
     // Command line validation
     if (argc != 4) {                   // Verify 3 arguments provided
         fprintf(stderr, "usage: %s <hostname> <port> <FILE>\n", argv[0]);
@@ -585,7 +588,7 @@ int main(int argc, char **argv) {
     if (fp == NULL) {                  // Handle file open errors
         error(argv[3]);
     }
-
+    
     // Initialize CWND logging
     cwnd_file = fopen("CWND.csv", "w");
     if (cwnd_file == NULL) {
@@ -594,6 +597,7 @@ int main(int argc, char **argv) {
     fprintf(cwnd_file, "time,cwnd,ssthresh\n");
     
     // Initialize time tracking
+    gettimeofday(&tv_start, NULL);
     gettimeofday(&tv_last_window_change, NULL);
     log_cwnd();  // Log initial CWND
 
