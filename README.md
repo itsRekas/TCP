@@ -85,5 +85,5 @@ mm-delay 50 mm-loss 1 ./rdt_sender 127.0.0.1 8080 sample.txt
 
 
 ## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is for educational purposes.
 
